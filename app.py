@@ -106,6 +106,33 @@ body{font-family:'Sarabun','Helvetica Neue',sans-serif;background:var(--bg);padd
 .mfill{height:100%;background:var(--accent);width:0%;transition:width .3s;}
 .toast{position:fixed;bottom:88px;left:50%;transform:translateX(-50%) translateY(14px);background:var(--ink);color:#fff;padding:10px 20px;border-radius:99px;font-size:13px;font-weight:600;opacity:0;transition:all .3s;z-index:999;white-space:nowrap;pointer-events:none;}
 .toast.on{opacity:1;transform:translateX(-50%) translateY(0);}
+
+/* annotation button on cell */
+.ann-btn{position:absolute;top:5px;right:6px;background:rgba(255,255,255,.92);border:1.5px solid #c0392b;color:#c0392b;font-size:11px;font-weight:800;padding:3px 8px;border-radius:6px;cursor:pointer;font-family:inherit;z-index:2;}
+.ann-btn.has{background:#c0392b;color:#fff;}
+
+/* circle preview on thumbnail */
+.circ-preview{position:absolute;border:2.5px solid red;border-radius:50%;pointer-events:none;}
+.note-preview{position:absolute;color:red;font-size:10px;font-weight:900;text-shadow:0 0 3px #fff,0 0 3px #fff,0 0 3px #fff;pointer-events:none;white-space:nowrap;transform:translateX(-50%);}
+
+/* annotation editor modal */
+.ann-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:300;align-items:center;justify-content:center;flex-direction:column;padding:14px;}
+.ann-modal.on{display:flex;}
+.ann-box{background:var(--surface);border-radius:14px;overflow:hidden;width:100%;max-width:420px;}
+.ann-hdr{padding:10px 14px;background:var(--ink);color:#fff;font-size:13px;font-weight:700;display:flex;justify-content:space-between;align-items:center;}
+.ann-close{background:none;border:none;color:#fff;font-size:20px;cursor:pointer;padding:0 4px;}
+.ann-img-wrap{position:relative;width:100%;background:#000;touch-action:none;}
+.ann-img-wrap img{width:100%;display:block;user-select:none;-webkit-user-drag:none;}
+.ann-circle{position:absolute;border:3px solid red;border-radius:50%;pointer-events:none;box-shadow:0 0 0 1px rgba(255,255,255,.5);}
+.ann-hint{font-size:11px;color:var(--muted);text-align:center;padding:6px;}
+.ann-controls{padding:10px 14px 14px;display:flex;flex-direction:column;gap:10px;}
+.ann-size{display:flex;align-items:center;gap:10px;font-size:12px;font-weight:700;color:var(--muted);}
+.ann-size input[type=range]{flex:1;}
+.ann-note{width:100%;padding:10px;border:1.5px solid var(--border);border-radius:8px;font-family:inherit;font-size:14px;}
+.ann-actions{display:flex;gap:8px;}
+.ann-actions .btn{flex:1;}
+.btn-save{background:var(--accent);color:#fff;}
+.btn-del{background:#fff;border:1.5px solid var(--fail);color:var(--fail);}
 </style>
 </head>
 <body>
@@ -157,11 +184,38 @@ body{font-family:'Sarabun','Helvetica Neue',sans-serif;background:var(--bg);padd
 </div>
 <div class="toast" id="toast"></div>
 
+<!-- annotation editor -->
+<div class="ann-modal" id="annModal">
+  <div class="ann-box">
+    <div class="ann-hdr">
+      <span>🔴 วงแดง + คำอธิบาย</span>
+      <button class="ann-close" onclick="closeAnn()">×</button>
+    </div>
+    <div class="ann-img-wrap" id="annWrap">
+      <img id="annImg" draggable="false">
+      <div class="ann-circle" id="annCircle" style="display:none"></div>
+    </div>
+    <div class="ann-hint">แตะบนรูปเพื่อวางวงกลม · ลากเพื่อย้าย</div>
+    <div class="ann-controls">
+      <div class="ann-size">
+        ขนาดวง <input type="range" id="annR" min="5" max="35" value="14" oninput="drawCircle()">
+      </div>
+      <input type="text" class="ann-note" id="annNote" placeholder="คำอธิบาย (ไม่ใส่ก็ได้) เช่น มี defect ใหม่">
+      <div class="ann-actions">
+        <button class="btn btn-del" onclick="deleteAnn()">🗑 ลบวง</button>
+        <button class="btn btn-save" onclick="saveAnn()">✓ บันทึก</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script>
 let PAGES = [];
 let state = {};
+let annots = {};   // {"pi_ii": {cx,cy,r,note}}
 let filter = 'all';
 let fileName = '';
+let annTarget = null; // current "pi_ii" being edited
 const $ = id => document.getElementById(id);
 
 const upZone = $('upZone');
@@ -218,6 +272,9 @@ function build(){
           <img src="data:image/jpeg;base64,${img.b64}" loading="lazy">
           <div class="num">รูปที่ ${img.num}</div>
           <div class="lbl"></div>
+          <button class="ann-btn" onclick="openAnn(${pi},${ii},event)">🔴</button>
+          <div class="circ-preview" style="display:none"></div>
+          <div class="note-preview" style="display:none"></div>
         </div>
         <div class="actions">
           <button class="abtn p" onclick="mark(${pi},${ii},'pass',event)">✅ แก้ไขเรียบร้อย</button>
@@ -254,6 +311,117 @@ function refresh(pi,ii){
   cell.querySelector('.lbl').textContent = s==='pass'?'แก้ไขเรียบร้อย':s==='fail'?'แก้ไขยังไม่เรียบร้อย':'';
   cell.querySelector('.abtn.p').classList.toggle('on',s==='pass');
   cell.querySelector('.abtn.f').classList.toggle('on',s==='fail');
+  // annotation preview
+  const key = `${pi}_${ii}`;
+  const ann = annots[key];
+  const annBtn = cell.querySelector('.ann-btn');
+  const circ = cell.querySelector('.circ-preview');
+  const notePrev = cell.querySelector('.note-preview');
+  annBtn.classList.toggle('has', !!ann);
+  if(ann){
+    const wrap = cell.querySelector('.img-wrap');
+    const W = wrap.clientWidth, H = wrap.clientHeight;
+    const r = ann.r * W;
+    circ.style.display = '';
+    circ.style.left   = (ann.cx*W - r)+'px';
+    circ.style.top    = (ann.cy*H - r)+'px';
+    circ.style.width  = (r*2)+'px';
+    circ.style.height = (r*2)+'px';
+    if(ann.note){
+      notePrev.style.display = '';
+      notePrev.textContent = ann.note;
+      notePrev.style.left = (ann.cx*W)+'px';
+      notePrev.style.top  = Math.max(2, ann.cy*H - r - 14)+'px';
+    } else notePrev.style.display = 'none';
+  } else {
+    circ.style.display = 'none';
+    notePrev.style.display = 'none';
+  }
+}
+
+// ── annotation editor ──
+let annDrag = false;
+
+function openAnn(pi, ii, e){
+  if(e) e.stopPropagation();
+  annTarget = `${pi}_${ii}`;
+  const img = PAGES[pi].images[ii];
+  $('annImg').src = 'data:image/jpeg;base64,' + img.b64;
+  const ann = annots[annTarget];
+  if(ann){
+    $('annR').value = Math.round(ann.r * 100);
+    $('annNote').value = ann.note || '';
+    setTimeout(drawCircle, 100);
+  } else {
+    $('annR').value = 14;
+    $('annNote').value = '';
+    $('annCircle').style.display = 'none';
+    annots[annTarget] = null; // placeholder until tapped
+  }
+  $('annModal').classList.add('on');
+}
+
+function annPos(ev){
+  const wrap = $('annWrap');
+  const rect = wrap.getBoundingClientRect();
+  const t = ev.touches ? ev.touches[0] : ev;
+  let x = (t.clientX - rect.left) / rect.width;
+  let y = (t.clientY - rect.top) / rect.height;
+  return [Math.max(0,Math.min(1,x)), Math.max(0,Math.min(1,y))];
+}
+
+function placeCircle(ev){
+  ev.preventDefault();
+  const [cx, cy] = annPos(ev);
+  if(!annots[annTarget]) annots[annTarget] = {cx, cy, r: $('annR').value/100, note: $('annNote').value};
+  else { annots[annTarget].cx = cx; annots[annTarget].cy = cy; }
+  drawCircle();
+}
+
+function drawCircle(){
+  const ann = annots[annTarget];
+  if(!ann) return;
+  ann.r = $('annR').value / 100;
+  const wrap = $('annWrap');
+  const W = wrap.clientWidth, H = wrap.clientHeight;
+  const r = ann.r * W;
+  const c = $('annCircle');
+  c.style.display = '';
+  c.style.left   = (ann.cx*W - r)+'px';
+  c.style.top    = (ann.cy*H - r)+'px';
+  c.style.width  = (r*2)+'px';
+  c.style.height = (r*2)+'px';
+}
+
+$('annWrap').addEventListener('mousedown', e=>{ annDrag=true; placeCircle(e); });
+$('annWrap').addEventListener('mousemove', e=>{ if(annDrag) placeCircle(e); });
+window.addEventListener('mouseup', ()=>annDrag=false);
+$('annWrap').addEventListener('touchstart', e=>{ annDrag=true; placeCircle(e); }, {passive:false});
+$('annWrap').addEventListener('touchmove', e=>{ if(annDrag) placeCircle(e); }, {passive:false});
+window.addEventListener('touchend', ()=>annDrag=false);
+
+function saveAnn(){
+  const ann = annots[annTarget];
+  if(!ann){ closeAnn(); return; }
+  ann.note = $('annNote').value.trim();
+  const [pi, ii] = annTarget.split('_').map(Number);
+  closeAnn();
+  refresh(pi, ii);
+  toast('🔴 บันทึกวงแดงแล้ว');
+}
+
+function deleteAnn(){
+  const [pi, ii] = annTarget.split('_').map(Number);
+  delete annots[annTarget];
+  closeAnn();
+  refresh(pi, ii);
+  toast('ลบวงแดงแล้ว');
+}
+
+function closeAnn(){
+  if(annots[annTarget] === null) delete annots[annTarget];
+  $('annModal').classList.remove('on');
+  annTarget = null;
 }
 
 function markAll(s){
@@ -295,10 +463,12 @@ async function doExport(){
   $('mMsg').textContent='ประทับ label ลง PDF...';
   $('mFill').style.width='25%';
   try{
+    const cleanAnnots = {};
+    Object.entries(annots).forEach(([k,v])=>{ if(v) cleanAnnots[k]=v; });
     const res = await fetch('stamp', {
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({state})
+      body: JSON.stringify({state, annots: cleanAnnots})
     });
     $('mFill').style.width='85%';
     if(!res.ok) throw new Error('server error '+res.status);
@@ -388,6 +558,8 @@ def stamp():
     doc = fitz.open(stream=STORE[sid]['pdf'], filetype='pdf')
     font = fitz.Font(fontfile=FONT_PATH)
 
+    annots = data.get('annots', {})  # {"pi_ii": {"cx":0-1,"cy":0-1,"r":0-1,"note":"..."}}
+
     for pi_str, img_states in state.items():
         pi = int(pi_str)
         if pi >= len(doc):
@@ -396,27 +568,58 @@ def stamp():
         big_imgs = get_big_imgs(page)
 
         for ii_str, status in img_states.items():
-            if not status:
-                continue
             ii = int(ii_str)
             if ii >= len(big_imgs):
                 continue
 
             x0, y0, x1, y1 = big_imgs[ii]['bbox']
+            img_w = x1 - x0
+            img_h = y1 - y0
             img_cx = (x0 + x1) / 2
-            label = "แก้ไขเรียบร้อย" if status == 'pass' else "แก้ไขยังไม่เรียบร้อย"
-            text_w = font.text_length(label, fontsize=FONT_SIZE)
-            box_w = text_w + PAD_X * 2
-            bx0 = img_cx - box_w / 2
-            bx1 = bx0 + box_w
-            by1 = y1 - MARGIN_BOTTOM
-            by0 = by1 - BOX_HEIGHT
-            color = PASS_COLOR if status == 'pass' else FAIL_COLOR
 
-            page.draw_rect(fitz.Rect(bx0, by0, bx1, by1), color=(0, 0, 0), fill=color, width=0.8)
-            tw = fitz.TextWriter(page.rect)
-            tw.append((bx0 + PAD_X, by0 + BOX_HEIGHT - PAD_X + 1), label, font=font, fontsize=FONT_SIZE)
-            tw.write_text(page, color=TEXT_COLOR)
+            # ── status label ──
+            if status:
+                label = "แก้ไขเรียบร้อย" if status == 'pass' else "แก้ไขยังไม่เรียบร้อย"
+                text_w = font.text_length(label, fontsize=FONT_SIZE)
+                box_w = text_w + PAD_X * 2
+                bx0 = img_cx - box_w / 2
+                bx1 = bx0 + box_w
+                by1 = y1 - MARGIN_BOTTOM
+                by0 = by1 - BOX_HEIGHT
+                color = PASS_COLOR if status == 'pass' else FAIL_COLOR
+
+                page.draw_rect(fitz.Rect(bx0, by0, bx1, by1), color=(0, 0, 0), fill=color, width=0.8)
+                tw = fitz.TextWriter(page.rect)
+                tw.append((bx0 + PAD_X, by0 + BOX_HEIGHT - PAD_X + 1), label, font=font, fontsize=FONT_SIZE)
+                tw.write_text(page, color=TEXT_COLOR)
+
+            # ── red circle + note annotation ──
+            ann = annots.get(f"{pi}_{ii}")
+            if ann:
+                cx = x0 + float(ann['cx']) * img_w
+                cy = y0 + float(ann['cy']) * img_h
+                r  = max(6.0, float(ann.get('r', 0.12)) * img_w)
+                # red circle outline
+                page.draw_circle((cx, cy), r, color=(1, 0, 0), width=2.0)
+
+                note = (ann.get('note') or '').strip()
+                if note:
+                    note_size = 11.0
+                    note_w = font.text_length(note, fontsize=note_size)
+                    # place note above circle; clamp inside image bounds
+                    nx = cx - note_w / 2
+                    nx = max(x0 + 2, min(nx, x1 - note_w - 2))
+                    ny = cy - r - 5
+                    if ny - note_size < y0 + 2:  # too high -> below circle
+                        ny = cy + r + note_size + 3
+                    # white halo for readability
+                    tw2 = fitz.TextWriter(page.rect)
+                    tw2.append((nx, ny), note, font=font, fontsize=note_size)
+                    for dx, dy in [(-0.7,0),(0.7,0),(0,-0.7),(0,0.7)]:
+                        twh = fitz.TextWriter(page.rect)
+                        twh.append((nx+dx, ny+dy), note, font=font, fontsize=note_size)
+                        twh.write_text(page, color=(1, 1, 1))
+                    tw2.write_text(page, color=(1, 0, 0))
 
     buf = io.BytesIO()
     doc.save(buf)
