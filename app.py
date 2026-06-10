@@ -413,7 +413,7 @@ def stamp():
             by0 = by1 - BOX_HEIGHT
             color = PASS_COLOR if status == 'pass' else FAIL_COLOR
 
-            page.draw_rect(fitz.Rect(bx0, by0, bx1, by1), color=None, fill=color)
+            page.draw_rect(fitz.Rect(bx0, by0, bx1, by1), color=(0, 0, 0), fill=color, width=0.8)
             tw = fitz.TextWriter(page.rect)
             tw.append((bx0 + PAD_X, by0 + BOX_HEIGHT - PAD_X + 1), label, font=font, fontsize=FONT_SIZE)
             tw.write_text(page, color=TEXT_COLOR)
